@@ -1,11 +1,14 @@
 import pysam
 
-save = pysam.set_verbosity(0)
-samFile = "data/output.bam"
-bam = pysam.AlignmentFile(samFile, "rb")
-pysam.set_verbosity(save)
 
-chromosome_counts = {}  
+# Read file.
+samFile = "data/output.sorted.bam"
+bam = pysam.AlignmentFile(samFile, "rb")
+
+# See what's in a read
+# print(next(bam).__dir__())
+
+chromosome_counts = {}
 
 for read in bam:
     chromosome = read.reference_name
