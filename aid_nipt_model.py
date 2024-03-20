@@ -4,17 +4,17 @@ from sklearn.model_selection import train_test_split
 import tensorflow as tf
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout
-from kerastuner import BayesianOptimization
+from keras_tuner import BayesianOptimization
 
 image_height = 380
 image_width = 780
 num_channels = 3
 
-def load_images(folder_path):
+def load_images(folder_path, name):
     images = []
     labels = []
     for filename in os.listdir(folder_path):
-        if filename.endswith(".png"):
+        if filename.endswith(f'.{name}.png'):
             image_path = os.path.join(folder_path, filename)
             image = tf.keras.preprocessing.image.load_img(image_path, target_size=(image_height, image_width))
             image = tf.keras.preprocessing.image.img_to_array(image)
@@ -22,20 +22,6 @@ def load_images(folder_path):
             images.append(image)
             labels.append(os.path.basename(folder_path))
     return np.array(images), np.array(labels)
-
-positives_images, positives_labels = load_images("/kaggle/input/positives-image")
-negatives_images, negatives_labels = load_images("/kaggle/input/negatives-image")
-
-positives_labels = np.ones(len(positives_images))
-negatives_labels = np.zeros(len(negatives_images))
-
-images = np.concatenate((positives_images, negatives_images), axis=0)
-labels = np.concatenate((positives_labels, negatives_labels), axis=0)
-indices = np.random.permutation(len(images))
-images = images[indices]
-labels = labels[indices]
-
-train_images, test_images, train_labels, test_labels = train_test_split(images, labels, test_size=0.2, random_state=42)
 
 def build_model(hp):
     model = Sequential()
@@ -66,21 +52,44 @@ def build_model(hp):
     
     return model
 
-tuner = BayesianOptimization(
-    build_model,
-    objective='val_accuracy',
-    max_trials=10,
-    directory='my_dir',
-    project_name='cnn_tuning'
-)
+def create_model(name):
+    positives_images, positives_labels = load_images('/kaggle/input/positives-image', name)
+    negatives_images, negatives_labels = load_images('/kaggle/input/negatives-image', name)
 
-tuner.search(train_images, train_labels, epochs=10, validation_split=0.2)
+    positives_labels = np.ones(len(positives_images))
+    negatives_labels = np.zeros(len(negatives_images))
 
-best_model = tuner.get_best_models(num_models=1)[0]
-best_model.fit(train_images, train_labels, epochs=10)
-best_model.save("best_model.h5")
+    images = np.concatenate((positives_images, negatives_images), axis=0)
+    labels = np.concatenate((positives_labels, negatives_labels), axis=0)
+    indices = np.random.permutation(len(images))
+    images = images[indices]
+    labels = labels[indices]
 
-loaded_model = load_model("best_model.h5")
-test_loss, test_accuracy = best_model.evaluate(test_images, test_labels)
-print("Test Accuracy:", test_accuracy)
-print("Test Loss:", test_loss)
+    train_images, test_images, train_labels, test_labels = train_test_split(images, labels, test_size=0.2, random_state=42)
+
+    tuner = BayesianOptimization(
+        build_model,
+        objective='val_accuracy',
+        max_trials=10,
+        directory=f'training/{name}',
+        project_name='cnn_tuning'
+    )
+
+    tuner.search(train_images, train_labels, epochs=10, validation_split=0.2)
+
+    best_model = tuner.get_best_models(num_models=1)[0]
+    best_model.fit(train_images, train_labels, epochs=10)
+    best_model.save(f'best_model_of_{name}.h5')
+
+    loaded_model = load_model(f'best_model_of_{name}.h5')
+    test_loss, test_accuracy = best_model.evaluate(test_images, test_labels)
+    print(f'Test Accuracy of {name}:', test_accuracy)
+    print(f'Test Loss of {name}:', test_loss)
+
+def main():
+    create_model('mean')
+    create_model('median')
+    create_model('iqr')
+
+if __name__ == "__main__":
+    main()
