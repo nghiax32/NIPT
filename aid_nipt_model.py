@@ -5,14 +5,14 @@ import tensorflow as tf
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout
 from keras_tuner import BayesianOptimization
+from keras.callbacks import Callback
 
-image_height = 380
-image_width = 780
+image_height = 340
+image_width = 740
 num_channels = 3
 
 def load_images(folder_path, name):
-    images = []
-    labels = []
+    images = []; labels = []
     for filename in os.listdir(folder_path):
         if filename.endswith(f'.{name}.png'):
             image_path = os.path.join(folder_path, filename)
@@ -22,6 +22,23 @@ def load_images(folder_path, name):
             images.append(image)
             labels.append(os.path.basename(folder_path))
     return np.array(images), np.array(labels)
+
+class PrintValidationMetricsCallback(Callback):
+    def on_epoch_end(self, epoch, logs=None):
+        print(f'val_loss: {logs['val_loss']}, val_accuracy: {logs['val_accuracy']}')
+
+class PrintBestValidationAccuracyCallback(Callback):
+    def __init__(self):
+        super(PrintBestValidationAccuracyCallback, self).__init__()
+        self.best_val_accuracy = 0.0
+
+    def on_epoch_end(self, epoch, logs=None):
+        val_accuracy = logs.get('val_accuracy')
+        if val_accuracy is not None and val_accuracy > self.best_val_accuracy:
+            self.best_val_accuracy = val_accuracy
+
+    def on_train_end(self, logs=None):
+        print(f'Best val_accuracy: {self.best_val_accuracy}')
 
 def build_model(hp):
     model = Sequential()
@@ -52,44 +69,52 @@ def build_model(hp):
     
     return model
 
-def create_model(name):
-    positives_images, positives_labels = load_images('/kaggle/input/positives-image', name)
-    negatives_images, negatives_labels = load_images('/kaggle/input/negatives-image', name)
+def handle(name):
+        positives_images, positives_labels = load_images('/kaggle/input/positive-images', name)
+        negatives_images, negatives_labels = load_images('/kaggle/input/negative-images', name)
 
-    positives_labels = np.ones(len(positives_images))
-    negatives_labels = np.zeros(len(negatives_images))
+        positives_labels = np.ones(len(positives_images))
+        negatives_labels = np.zeros(len(negatives_images))
+        
+        train_pos_images, rest_pos_images, train_pos_labels, rest_pos_labels = train_test_split(positives_images, positives_labels, test_size=0.2, random_state=42)
+        train_neg_images, rest_neg_images, train_neg_labels, rest_neg_labels = train_test_split(negatives_images, negatives_labels, test_size=0.2, random_state=42)
 
-    images = np.concatenate((positives_images, negatives_images), axis=0)
-    labels = np.concatenate((positives_labels, negatives_labels), axis=0)
-    indices = np.random.permutation(len(images))
-    images = images[indices]
-    labels = labels[indices]
+        val_pos_images, test_pos_images, val_pos_labels, test_pos_labels = train_test_split(rest_pos_images, rest_pos_labels, test_size=0.5, random_state=42)
+        val_neg_images, test_neg_images, val_neg_labels, test_neg_labels = train_test_split(rest_neg_images, rest_neg_labels, test_size=0.5, random_state=42)
 
-    train_images, test_images, train_labels, test_labels = train_test_split(images, labels, test_size=0.2, random_state=42)
+        train_images = np.concatenate((train_pos_images, train_neg_images), axis=0)
+        train_labels = np.concatenate((train_pos_labels, train_neg_labels), axis=0)
 
-    tuner = BayesianOptimization(
-        build_model,
-        objective='val_accuracy',
-        max_trials=10,
-        directory=f'training/{name}',
-        project_name='cnn_tuning'
-    )
+        val_images = np.concatenate((val_pos_images, val_neg_images), axis=0)
+        val_labels = np.concatenate((val_pos_labels, val_neg_labels), axis=0)
 
-    tuner.search(train_images, train_labels, epochs=10, validation_split=0.2)
+        test_images = np.concatenate((test_pos_images, test_neg_images), axis=0)
+        test_labels = np.concatenate((test_pos_labels, test_neg_labels), axis=0)
 
-    best_model = tuner.get_best_models(num_models=1)[0]
-    best_model.fit(train_images, train_labels, epochs=10)
-    best_model.save(f'best_model_of_{name}.h5')
+        tuner = BayesianOptimization(
+            build_model,
+            objective='val_accuracy',
+            max_trials=10,
+            directory=f'training/{name}',
+            project_name='cnn_tuning'
+        )
 
-    loaded_model = load_model(f'best_model_of_{name}.h5')
-    test_loss, test_accuracy = best_model.evaluate(test_images, test_labels)
-    print(f'Test Accuracy of {name}:', test_accuracy)
-    print(f'Test Loss of {name}:', test_loss)
+        callbacks = [PrintValidationMetricsCallback(), PrintBestValidationAccuracyCallback()]
+        tuner.search(train_images, train_labels, epochs=10,  validation_data=(val_images, val_labels), callbacks=callbacks)
+
+        best_model = tuner.get_best_models(num_models=1)[0]
+        best_model.fit(train_images, train_labels, epochs=10)
+        best_model.save(f'best_model_of_{name}.h5')
+
+        loaded_model = load_model(f'best_model_of_{name}.h5')
+        test_loss, test_accuracy = best_model.evaluate(test_images, test_labels)
+        print(f'Test Accuracy of {name}:', test_accuracy)
+        print(f'Test Loss of {name}:', test_loss)
 
 def main():
-    create_model('mean')
-    create_model('median')
-    create_model('iqr')
+    handle('mean')
+#     handle('median')
+#     handle('iqr')
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

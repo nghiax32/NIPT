@@ -3,6 +3,9 @@ import subprocess
 import pysam
 import numpy as np
 import matplotlib.pyplot as plt
+import logging
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # NGS data preprocessing.
 def data_preprocessing(output_folder, bam_file):
@@ -32,11 +35,11 @@ def data_preprocessing(output_folder, bam_file):
     subprocess.run(command, check=True)
     return output_bam, output_bai
 
-# Removal of lower 5% and upper 5% bins of the normalized FD representative values.
+# Removal of lower 10% and upper 10% bins of the normalized FD representative values.
 def remove_outliers(values):
     sorted_values = sorted(values)
-    lower_index = int(len(values) * 0.05)
-    upper_index = int(len(values) * 0.95)
+    lower_index = int(len(values) * 0.1)
+    upper_index = int(len(values) * 0.9)
     trimmed_values = sorted_values[lower_index:upper_index]
     result = [value for value in values if value in trimmed_values]
     return result 
@@ -53,12 +56,17 @@ def calculate_fd_of_chr(bam, chr):
         else:
             positions.append(read.reference_end - 80)
     positions = sorted(positions)
+    start_position = positions[0]
+    positions = [position - start_position for position in positions]
+    end_position = positions[-1]
     bin_size = 1e6
-    fragment_distance = [[] for _ in range(int(max(positions) // bin_size) + 1)]
+    fragment_distance = [[] for _ in range(int((end_position) // bin_size) + 1)]
     for i in range(len(positions) - 1):
         position = positions[i]
-        bin_position = int(position // bin_size)
         position_next = positions[i+1]
+        if position == position_next:
+            continue
+        bin_position = int(position // bin_size)
         bin_position_next = int(position_next // bin_size)
         position_distance = position_next - position
         bin_seperate = bin_position_next * bin_size
@@ -68,12 +76,13 @@ def calculate_fd_of_chr(bam, chr):
             fragment_distance[bin_position].append(position_distance)
         else:
             fragment_distance[bin_position_next].append(position_distance)
-    fd_mean = []
-    fd_median = []
-    fd_iqr = []
+    fd_mean = []; fd_median = []; fd_iqr = []
     for i in range(len(fragment_distance)):
         bin = fragment_distance[i]
         if len(bin) == 0:
+            fd_mean.append(0)
+            fd_median.append(0)
+            fd_iqr.append(0)
             continue
         fd_mean.append(np.mean(bin))
         fd_median.append(np.median(bin))
@@ -115,7 +124,7 @@ def read_array_from_file(input_file):
         arr_type = None 
         for line in file:
             line = line.strip()
-            if line.startswith("#"):
+            if line.startswith('#'):
                 current_list = line[1:]
                 data[current_list] = []
             else:
@@ -149,17 +158,17 @@ def fd_calculatation(output_file, bam, tc, icc):
 def trs_image_generation(output_image, fd_tc, fd_icc):
     fig, axs = plt.subplots(6, 1, figsize=(4, 2), dpi=200)
     for i in range(3):
-        axs[i*2].plot(fd_tc, color='black')
+        axs[i*2].plot(fd_icc[i], color='black')
         axs[i*2].axis('off')
-        axs[i*2].set_xlim(0, len(fd_tc))
-        axs[i*2].set_ylim(min(fd_tc), max(fd_tc))
-        axs[i*2].fill_between(range(len(fd_tc)), fd_tc, color = 'black')
+        axs[i*2].set_xlim(0, len(fd_icc[i]))
+        axs[i*2].set_ylim(min(fd_icc[i]), max(fd_icc[i]))
+        axs[i*2].fill_between(range(len(fd_icc[i])), fd_icc[i], color = 'black')
 
-        axs[i*2+1].plot(fd_icc[i], color='black')
+        axs[i*2+1].plot(fd_tc, color='black')
         axs[i*2+1].axis('off')
-        axs[i*2+1].set_xlim(0, len(fd_icc[i]))
-        axs[i*2+1].set_ylim(min(fd_icc[i]), max(fd_icc[i]))
-        axs[i*2+1].fill_between(range(len(fd_icc[i])), fd_icc[i], color = 'black')
+        axs[i*2+1].set_xlim(0, len(fd_tc))
+        axs[i*2+1].set_ylim(min(fd_tc), max(fd_tc))
+        axs[i*2+1].fill_between(range(len(fd_tc)), fd_tc, color = 'black')
         
     plt.axis('off')
     plt.tight_layout()
@@ -178,20 +187,25 @@ def handle(data_folder, value_folder, image_folder, tc, icc):
         os.makedirs(image_folder)
 
     # List data files with absolute paths.
+    bam_listdir = os.listdir(data_folder)
     bam_files = []
-    for file in os.listdir(data_folder):
+    for file in bam_listdir:
         if file.endswith('.bam'):
             bam_files.append(os.path.join(data_folder, file))
+            bai_file = os.path.basename(file).replace('.bam', '.bam.bai')
+            if bai_file not in bam_listdir:
+                logging.info(f'Indexing {os.path.basename(value_file)}')
+                input_bam = os.path.join(data_folder, file)
+                command = ['samtools', 'index', f'{input_bam}']
+                subprocess.run(command, check=True)
 
     # List value files with absolute paths.
     value_files = []
     for file in os.listdir(value_folder):
         if file.endswith('.txt'):
-            sample_name = file.split('.txt')[0]
-            if sample_name not in value_files:
-                value_files.append(sample_name)
+            value_files.append(os.path.join(value_folder, file))
 
-    # List image files with absolute paths.
+    # List image files.
     image_files = []
     for file in os.listdir(image_folder):
         if file.endswith('.mean.png'):
@@ -199,19 +213,25 @@ def handle(data_folder, value_folder, image_folder, tc, icc):
             if sample_name not in image_files:
                 image_files.append(sample_name)
 
-    # Loop through the list and process it.
+    # Calculate value files.
     for bam_file in bam_files:
         sample_name = os.path.basename(bam_file).split('.bam')[0]
-        if sample_name not in value_files:
+        value_file = os.path.join(value_folder, os.path.basename(bam_file).replace('.bam', '.txt'))
+        if value_file not in value_files:
             # preprocessed_bam, preprocessed_bai = data_preprocessing(value_folder, bam_file)
+            logging.info(f'Calculating value file: {sample_name}')
             bam = pysam.AlignmentFile(str(bam_file), 'rb')
-            value_file = os.path.join(value_folder, os.path.basename(bam_file).replace('.bam', '.txt'))
             fd_calculatation(value_file, bam, tc, icc)
+            value_files.append(value_file)
             # os.remove(preprocessed_bam)
             # os.remove(preprocessed_bai)
+
+    # Generate image files.
+    for value_file in value_files:
+        sample_name = os.path.basename(value_file).split('.txt')[0]
         if sample_name not in image_files:
-            # Get data from file. 
-            value_file = os.path.join(value_folder, os.path.basename(bam_file).replace('.bam', '.txt'))
+            # Get data from file.
+            logging.info(f'Generating image file: {sample_name}')
             data = read_array_from_file(value_file)
             fd_mean_tc = data['fd_mean_tc']
             fd_median_tc = data['fd_median_tc']
@@ -220,21 +240,20 @@ def handle(data_folder, value_folder, image_folder, tc, icc):
             fd_median_icc = data['fd_median_icc']
             fd_iqr_icc = data['fd_iqr_icc']
             # Generate image.
-            image_file_mean = os.path.join(image_folder, os.path.basename(bam_file).replace('.bam', '.mean.png'))
-            image_file_median = os.path.join(image_folder, os.path.basename(bam_file).replace('.bam', '.median.png'))
-            image_file_iqr = os.path.join(image_folder, os.path.basename(bam_file).replace('.bam', '.iqr.png'))
+            image_file_mean = os.path.join(image_folder, os.path.basename(value_file).replace('.txt', '.mean.png'))
+            image_file_median = os.path.join(image_folder, os.path.basename(value_file).replace('.txt', '.median.png'))
+            image_file_iqr = os.path.join(image_folder, os.path.basename(value_file).replace('.txt', '.iqr.png'))
             trs_image_generation(image_file_mean, fd_mean_tc, fd_mean_icc)
             trs_image_generation(image_file_median, fd_median_tc, fd_median_icc)
             trs_image_generation(image_file_iqr, fd_iqr_tc, fd_iqr_icc)
 
-
 def main():
-    # NEGATIVE_DATA_FOLDER_1 = '/data/tinhnh/NIPT/data/negatives'
-    # NEGATIVE_DATA_FOLDER_2 = '/home/tinhnh/positives2'
-    # POSITIVE_DATA_FOLDER = '/data/tinhnh/NIPT/data/positives'
-    NEGATIVE_DATA_FOLDER_1 = 'data/negatives'
-    NEGATIVE_DATA_FOLDER_2 = 'data/negatives'
-    POSITIVE_DATA_FOLDER = 'data/positives'
+    NEGATIVE_DATA_FOLDER_1 = '/data/tinhnh/NIPT/data/negatives'
+    NEGATIVE_DATA_FOLDER_2 = '/home/tinhnh/negatives2'
+    POSITIVE_DATA_FOLDER = '/data/tinhnh/NIPT/data/positives'
+    # NEGATIVE_DATA_FOLDER_1 = 'data/negatives'
+    # NEGATIVE_DATA_FOLDER_2 = 'data/negatives'
+    # POSITIVE_DATA_FOLDER = 'data/positives'
 
     negative_data_folder = NEGATIVE_DATA_FOLDER_1
     negative_value_folder = 'data/negative_values'
