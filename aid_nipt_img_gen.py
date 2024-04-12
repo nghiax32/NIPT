@@ -46,12 +46,12 @@ def fd_calculatation(output_file, bam, tc, icc):
     def calculate_fd_of_chr(bam, chr):
         # Removal of lower 10% and upper 10% bins of the normalized FD representative values.
         def remove_outliers(values):
-            sorted_values = sorted(values)
+            sorted_values_with_index = sorted(enumerate(values), key=lambda x: x[1])            
             lower_index = int(len(values) * 0.1)
-            upper_index = int(len(values) * 0.9)
-            trimmed_values = sorted_values[lower_index:upper_index]
-            result = [value for value in values if value in trimmed_values]
-            return result 
+            upper_index = int(len(values) * 0.9)            
+            trimmed_indices = [index for index, _ in sorted_values_with_index[lower_index:upper_index]]
+            result = [values[index] for index in range(len(values)) if index in trimmed_indices]
+            return result
 
         # Non-overlapping binning at 1 Mbp.
         chr_bam = bam.fetch(chr)
@@ -104,6 +104,7 @@ def fd_calculatation(output_file, bam, tc, icc):
         fd_median = remove_outliers(fd_median)
         fd_iqr = [fd_iqr_value / fd_iqr_median for fd_iqr_value in fd_iqr]
         fd_iqr = remove_outliers(fd_iqr)
+
         return fd_mean, fd_median, fd_iqr
 
     # Save 1D array to text file.
@@ -171,7 +172,7 @@ def list_files(data_folder, value_folder, bam_files, value_files):
             bam_files.append(os.path.join(data_folder, file))
             bai_file = os.path.basename(file).replace('.bam', '.bam.bai')
             if bai_file not in bam_listdir:
-                logging.info(f'Indexing {os.path.basename(value_file)}')
+                logging.info(f'Indexing {os.path.basename(file)}')
                 input_bam = os.path.join(data_folder, file)
                 command = ['samtools', 'index', f'{input_bam}']
                 subprocess.run(command, check=True)
@@ -288,8 +289,9 @@ def generate_image_files(image_folder, value_files, y_lim):
 def main():
     # NEGATIVE_DATA_FOLDER_1 = '/data/tinhnh/NIPT/data/negatives'
     # NEGATIVE_DATA_FOLDER_2 = '/home/tinhnh/negatives2'
-    # POSITIVE_DATA_FOLDER_1 = '/data/tinhnh/NIPT/data/positives'
-    # POSITIVE_DATA_FOLDER_2 = '/home/tinhnh/positives2'
+    # POSITIVE_DATA_FOLDER_1 = '/home/tinhnh/CHR13'
+    # POSITIVE_DATA_FOLDER_2 = '/home/tinhnh/CHR13'
+
     NEGATIVE_DATA_FOLDER_1 = 'data/negatives'
     NEGATIVE_DATA_FOLDER_2 = 'data/negatives'
     POSITIVE_DATA_FOLDER_1 = 'data/positives'
